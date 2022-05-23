@@ -18,12 +18,47 @@ int cell_size = 10;
 
 typedef struct
 {
+	int p, size;
+	int* cells;
+} STACK;
+
+
+typedef struct
+{
 	int x, y, offset_x, offset_y;
-	int w, h, cell_count;
-	int8_t* cells;
+	int w, h;
+	STACK stack;
 	bool run, show_grid;
 } CANVAS;
 
+
+void undo(STACK* stack)
+{
+	if (stack->p > 0)
+		stack->p--;
+}
+
+void redo(STACK* stack)
+{
+	stack->p++;
+}
+
+void push(STACK* stack, int data)
+{	
+	bool ok = true;
+
+	for (int i = 0; i < stack->p; i++) {
+		if (stack->cells[i] == data) {
+			ok = false;
+			break;
+		}
+	}
+	
+	if(ok) {
+		SDL_Log("stack pointer: %d %d", stack->p, data);
+		stack->cells[stack->p++] = data;
+	}
+}
 
 void cap_fps(int start_time)
 {
@@ -63,18 +98,39 @@ void render(SDL_Renderer* renderer, CANVAS* canvas)
 	if (canvas->show_grid)
 		draw_grid(renderer, canvas, size);
 
-	int i = (canvas->offset_y/cell_size*canvas->w)+canvas->offset_x/cell_size;
-	for (int y = canvas->y; y < canvas->y+size; y += cell_size) {
-		for (int x = canvas->x; x < canvas->x+size; x+=cell_size) {
-			if (canvas->cells[i] == 1) {
-				r.x = x;
-				r.y = y;
-				SDL_RenderDrawRect(renderer, &r);
-				SDL_RenderFillRect(renderer, &r);
+	// int i = (canvas->offset_y/cell_size*canvas->w)+canvas->offset_x/cell_size;
+	// for (int y = canvas->y; y < canvas->y+size; y += cell_size) {
+		// for (int x = canvas->x; x < canvas->x+size; x+=cell_size) {
+			// if (canvas->stack.cells[i] == 1) {
+				// r.x = x;
+				// r.y = y;
+				// SDL_RenderDrawRect(renderer, &r);
+				// SDL_RenderFillRect(renderer, &r);
+			// }
+			// i++;
+		// }
+		// i += (canvas->w-canvas->w/cell_size);
+	// }
+
+	int x, y;
+	for (int i = 0; i < canvas->stack.p; i++) {
+		if (canvas->stack.cells[i] != NULL) {
+			if (canvas->stack.cells[i] < canvas->w) {
+				x = canvas->x+canvas->stack.cells[i] * cell_size;
+				y = canvas->y;
 			}
-			i++;
+			
+			else {
+				x = canvas->x+(canvas->stack.cells[i] % canvas->w) * cell_size;
+				y = canvas->y+floor(canvas->stack.cells[i] / canvas->w) * cell_size;
+			}
+
+
+			r.x = x;
+			r.y = y;
+			SDL_RenderDrawRect(renderer, &r);
+			SDL_RenderFillRect(renderer, &r);
 		}
-		i += (canvas->w-canvas->w/cell_size);
 	}
 
 	SDL_RenderPresent(renderer);
@@ -88,9 +144,10 @@ void canvas_init(CANVAS* canvas, int x, int y, int w, int h)
 	canvas->y = y;
 	canvas->w = w;
 	canvas->h = h;
-	canvas->cell_count = canvas->w*canvas->h;
-	int8_t* cells = calloc(canvas->cell_count, sizeof(int8_t));
-	canvas->cells = cells;
+	canvas->stack.p = 0;
+	canvas->stack.size = canvas->w*canvas->h;
+	int* cells = calloc(canvas->stack.size, sizeof(int));
+	canvas->stack.cells = cells;
 	canvas->run = false;
 }
 
@@ -102,48 +159,47 @@ int get_neighbor_count(CANVAS canvas, int index)
 	int nr = index+canvas.w;
 	for (int i = lr-1; i <= lr+1; i++) {
 		if (i < 0) {continue;}
-		if (canvas.cells[i] == 1) {
+		if (canvas.stack.cells[i] != 0) {
 			count++;
 		}
 	}
 
 	for (int i = index-1; i <= index+1; i+=2) {
-		if (i > canvas.cell_count) {continue;}
-		if (canvas.cells[i] == 1) {
+		if (i > canvas.w) {continue;}
+		if (canvas.stack.cells[i] != 0) {
 			count++;
 		}
 	}
 
 	for (int i = nr-1; i <= nr+1; i++) {
-		if (i > canvas.cell_count) {continue;}
-		if (canvas.cells[i] == 1) {
+		if (i > canvas.w) {continue;}
+		if (canvas.stack.cells[i] != 0) {
 			count++;
 		}
 	}
 
+	SDL_Log("count: %d, %d", index, count);
 	return count;
 }
 
 void simulate(CANVAS* canvas)
 {
 	int c = 0;
-	int8_t* cells = calloc(canvas->cell_count, sizeof(int8_t));
-	for (int i = 0; i < canvas->cell_count; i++) {
-		cells[i] = canvas->cells[i];
-		if (cells[i] == 1) {
-			c = get_neighbor_count(*canvas, i);
+	int* cells = calloc(canvas->stack.size, sizeof(int));
+	for (int i = 0; i < canvas->stack.size; i++) {
+		cells[i] = canvas->stack.cells[i];
+
+		if (cells[i] != 0) {
+			c = get_neighbor_count(*canvas, cells[i]);
+			SDL_Log("ok: %d, %d", cells[i], c);
 			if (c > 3 || c < 2) {
-				cells[i] = -1;
-			}	
+				SDL_Log("fuck: %d, %d", cells[i], c);
+				cells[i] = 0;
+			}
 		}
-
-		else if (get_neighbor_count(*canvas, i) == 3) {
-			cells[i] = 1;
-		}
-
 	}
-	free(canvas->cells);
-	canvas->cells = cells;
+	free(canvas->stack.cells);
+	canvas->stack.cells = cells;
 }
 
 int main() {
@@ -167,6 +223,7 @@ int main() {
 	bool moving = false;
 	bool clear = false;
 	char c = 0;
+	int multiplier = 1;
 
 	while (run) {
 		cap_fps(ticks);
@@ -252,7 +309,8 @@ int main() {
 						y = ((canvas.offset_y+y-canvas.y)/cell_size); // *(canvas.w/cell_size)
 						int f = x+y*canvas.w;
 						// if (!canvas.cells[f]) {
-						canvas.cells[f] = !clear;
+						// canvas.cells[f] = !clear;
+						push(&canvas.stack, f);
 						// }
 					}
 					break;
@@ -286,6 +344,20 @@ int main() {
 							canvas.show_grid = !canvas.show_grid;
 						break;
 
+						case SDLK_z:
+							for (int i = 0; i < multiplier; i++) {
+								undo(&canvas.stack);
+							}
+							multiplier++;
+						break;
+
+						case SDLK_y:
+							for (int i = 0; i < multiplier; i++) {
+								redo(&canvas.stack);
+							}
+							multiplier++;
+						break;
+
 						case SDLK_ESCAPE:
 							run = false;
 						break;
@@ -293,6 +365,7 @@ int main() {
 					break;
 
 				case SDL_KEYUP:
+					multiplier = 1;
 					break;
 					
 			}
